@@ -24,11 +24,11 @@ bool DoesWildcardMatchName(const UString &mask, const UString &name);
 
 namespace NWildcard {
 
-// FIXME #ifdef _WIN32
+#ifdef _WIN32
 // returns true, if name is like "a:", "c:", ...
 bool IsDriveColonName(const wchar_t *s);
 unsigned GetNumPrefixParts_if_DrivePath(UStringVector &pathParts);
-// #endif
+#endif
 
 struct CItem
 {
@@ -139,7 +139,7 @@ public:
   }
   void AddPreItem_Wildcard()
   {
-    AddPreItem(true, L"*", false, true);
+    AddPreItem(true, UString("*"), false, true);
   }
 };
 

@@ -91,6 +91,16 @@ static bool ParseInt64(const char *p, Int64 &val)
   return res;
 }
 
+static bool ParseInt64_MTime(const char *p, Int64 &val)
+{
+  // rare case tar contains spaces instead of MTime
+  for (unsigned i = 0; i < 12; i++)
+    if (p[i] != ' ')
+      return ParseInt64(p, val);
+  val = 0;
+  return true;
+}
+
 static bool ParseSize(const char *p, UInt64 &val)
 {
   if (GetBe32(p) == (UInt32)1 << 31)
@@ -124,7 +134,7 @@ API_FUNC_IsArc IsArc_Tar(const Byte *p2, size_t size)
   Int64 time;
   UInt32 checkSum;
   CHECK(ParseSize(p, packSize)); p += 12;
-  CHECK(ParseInt64(p, time)); p += 12;
+  CHECK(ParseInt64_MTime(p, time)); p += 12;
   CHECK(OctalToNumber32(p, 8, checkSum));
   return k_IsArc_Res_YES;
 }
@@ -192,7 +202,7 @@ static HRESULT GetNextItemReal(ISequentialInStream *stream, bool &filled, CItemE
   RIF(ParseSize(p, item.PackSize));
   item.Size = item.PackSize;
   p += 12;
-  RIF(ParseInt64(p, item.MTime)); p += 12;
+  RIF(ParseInt64_MTime(p, item.MTime)); p += 12;
   
   UInt32 checkSum;
   RIF(OctalToNumber32(p, 8, checkSum));
@@ -328,13 +338,63 @@ static HRESULT GetNextItemReal(ISequentialInStream *stream, bool &filled, CItemE
   return S_OK;
 }
 
+
+static HRESULT ReadDataToString(ISequentialInStream *stream, CItemEx &item, AString &s, EErrorType &error)
+{
+  const unsigned packSize = (unsigned)item.GetPackSizeAligned();
+  size_t processedSize = packSize;
+  HRESULT res = ReadStream(stream, s.GetBuf(packSize), &processedSize);
+  item.HeaderSize += (unsigned)processedSize;
+  s.ReleaseBuf_CalcLen((unsigned)item.PackSize);
+  RINOK(res);
+  if (processedSize != packSize)
+    error = k_ErrorType_UnexpectedEnd;
+  return S_OK;
+}
+
+static bool ParsePaxLongName(const AString &src, AString &dest)
+{
+  dest.Empty();
+  for (unsigned pos = 0;;)
+  {
+    if (pos >= src.Len())
+      return false;
+    const char *start = src.Ptr(pos);
+    const char *end;
+    const UInt32 lineLen = ConvertStringToUInt32(start, &end);
+    if (end == start)
+      return false;
+    if (*end != ' ')
+      return false;
+    if (lineLen > src.Len() - pos)
+      return false;
+    unsigned offset = (unsigned)(end - start) + 1;
+    if (lineLen < offset)
+      return false;
+    if (IsString1PrefixedByString2(src.Ptr(pos + offset), "path="))
+    {
+      offset += 5; // "path="
+      dest = src.Mid(pos + offset, lineLen - offset);
+      if (dest.IsEmpty())
+        return false;
+      if (dest.Back() != '\n')
+        return false;
+      dest.DeleteBack();
+      return true;
+    }
+    pos += lineLen;
+  }
+}
+
 HRESULT ReadItem(ISequentialInStream *stream, bool &filled, CItemEx &item, EErrorType &error)
 {
   item.HeaderSize = 0;
+
   bool flagL = false;
   bool flagK = false;
   AString nameL;
   AString nameK;
+  AString pax;
   
   for (;;)
   {
@@ -363,18 +423,11 @@ HRESULT ReadItem(ISequentialInStream *stream, bool &filled, CItemEx &item, EErro
         return S_OK;
       if (item.PackSize > (1 << 14))
         return S_OK;
-      unsigned packSize = (unsigned)item.GetPackSizeAligned();
-      char *buf = name->GetBuf(packSize);
-      size_t processedSize = packSize;
-      HRESULT res = ReadStream(stream, buf, &processedSize);
-      item.HeaderSize += (unsigned)processedSize;
-      name->ReleaseBuf_CalcLen((unsigned)item.PackSize);
-      RINOK(res);
-      if (processedSize != packSize)
-      {
-        error = k_ErrorType_UnexpectedEnd;
+
+      RINOK(ReadDataToString(stream, item, *name, error));
+      if (error != k_ErrorType_OK)
         return S_OK;
-      }
+
       continue;
     }
 
@@ -385,6 +438,14 @@ HRESULT ReadItem(ISequentialInStream *stream, bool &filled, CItemEx &item, EErro
       case 'X':
       {
         // pax Extended Header
+        if (item.Name.IsPrefixedBy("PaxHeader/"))
+        {
+          RINOK(ReadDataToString(stream, item, pax, error));
+          if (error != k_ErrorType_OK)
+            return S_OK;
+          continue;
+        }
+       
         break;
       }
       case NFileHeader::NLinkFlag::kDumpDir:
@@ -415,6 +476,16 @@ HRESULT ReadItem(ISequentialInStream *stream, bool &filled, CItemEx &item, EErro
     }
 
     error = k_ErrorType_OK;
+
+    if (!pax.IsEmpty())
+    {
+      AString name;
+      if (ParsePaxLongName(pax, name))
+        item.Name = name;
+      else
+        error = k_ErrorType_Warning;
+    }
+
     return S_OK;
   }
 }

@@ -10,11 +10,12 @@
 
 #include "SysIconUtils.h"
 
+#include <ShlObj.h>
+
 #ifndef _UNICODE
 extern bool g_IsNT;
 #endif
 
-#ifdef _WIN32
 int GetIconIndexForCSIDL(int csidl)
 {
   LPITEMIDLIST pidl = 0;
@@ -252,17 +253,3 @@ int CExtToIconMap::GetIconIndex(DWORD attrib, const UString &fileName)
   return GetIconIndex(attrib, fileName, NULL);
 }
 */
-
-#endif
-
-DWORD_PTR GetRealIconIndex(CFSTR path, DWORD attrib, int &iconIndex)
-{
-	iconIndex = 0; // FIXME
-	return 0; 
-}
-
-int CExtToIconMap::GetIconIndex(DWORD attrib, const wchar_t *fileName /*, UString *typeName */)
-{
-	return 0;
-}
-

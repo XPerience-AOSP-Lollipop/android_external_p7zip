@@ -3,7 +3,7 @@
 #ifndef __FILE_STREAMS_H
 #define __FILE_STREAMS_H
 
-#if defined(_WIN32) || defined(UNIX_USE_WIN_FILE)
+#ifdef _WIN32
 #define USE_WIN_FILE
 #endif
 
@@ -19,7 +19,7 @@
 
 #include "../IStream.h"
 
-#if 1 // FIXME #ifdef _WIN32
+#ifdef _WIN32
 typedef UINT_PTR My_UINT_PTR;
 #else
 typedef UINT My_UINT_PTR;
@@ -34,13 +34,12 @@ struct IInFileStream_Callback
 class CInFileStream:
   public IInStream,
   public IStreamGetSize,
-  #if 0 // #ifdef USE_WIN_FILE
+  #ifdef USE_WIN_FILE
   public IStreamGetProps,
   public IStreamGetProps2,
   #endif
   public CMyUnknownImp
 {
-  bool _ignoreSymbolicLink;
 public:
   #ifdef USE_WIN_FILE
   NWindows::NFile::NIO::CInFile File;
@@ -64,25 +63,21 @@ public:
 
   virtual ~CInFileStream();
 
-  CInFileStream(bool b=false);
+  CInFileStream();
   
   bool Open(CFSTR fileName)
   {
-  #ifdef USE_WIN_FILE
-    return File.Open(fileName,_ignoreSymbolicLink);
-  #else
     return File.Open(fileName);
-  #endif
   }
   
   bool OpenShared(CFSTR fileName, bool shareForWrite)
   {
-    return this->Open(fileName); // return File.OpenShared(fileName, shareForWrite);
+    return File.OpenShared(fileName, shareForWrite);
   }
 
   MY_QUERYINTERFACE_BEGIN2(IInStream)
   MY_QUERYINTERFACE_ENTRY(IStreamGetSize)
-  #if 0 // #ifdef USE_WIN_FILE
+  #ifdef USE_WIN_FILE
   MY_QUERYINTERFACE_ENTRY(IStreamGetProps)
   MY_QUERYINTERFACE_ENTRY(IStreamGetProps2)
   #endif
@@ -93,7 +88,7 @@ public:
   STDMETHOD(Seek)(Int64 offset, UInt32 seekOrigin, UInt64 *newPosition);
 
   STDMETHOD(GetSize)(UInt64 *size);
-  #if 0 // #ifdef USE_WIN_FILE
+  #ifdef USE_WIN_FILE
   STDMETHOD(GetProps)(UInt64 *size, FILETIME *cTime, FILETIME *aTime, FILETIME *mTime, UInt32 *attrib);
   STDMETHOD(GetProps2)(CStreamFileProps *props);
   #endif

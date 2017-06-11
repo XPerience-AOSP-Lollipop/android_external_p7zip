@@ -55,8 +55,6 @@ static int FindPlugin(const CObjectVector<CPluginInfo> &plugins, const UString &
 }
 */
 
-static const FChar kExtensionDelimiter = FTEXT('.');
-
 static void SplitNameToPureNameAndExtension(const FString &fullName,
     FString &pureName, FString &extensionDelimiter, FString &extension)
 {
@@ -70,7 +68,7 @@ static void SplitNameToPureNameAndExtension(const FString &fullName,
   else
   {
     pureName.SetFrom(fullName, index);
-    extensionDelimiter = FTEXT('.');
+    extensionDelimiter = '.';
     extension = fullName.Ptr(index + 1);
   }
 }
@@ -84,10 +82,8 @@ HRESULT OpenFileFolderPlugin(
     HWND parentWindow,
     bool &encrypted, UString &password)
 {
-#ifdef _WIN32
   CObjectVector<CPluginInfo> plugins;
   ReadFileFolderPluginInfoList(plugins);
-#endif
 
   FString extension, name, pureName, dot;
 
@@ -124,25 +120,19 @@ HRESULT OpenFileFolderPlugin(
   }
   */
 
-#ifdef _WIN32
   FOR_VECTOR (i, plugins)
   {
     const CPluginInfo &plugin = plugins[i];
     if (!plugin.ClassIDDefined)
       continue;
-#endif
     CPluginLibrary library;
 
     CThreadArchiveOpen t;
 
-#ifdef _WIN32
     if (plugin.FilePath.IsEmpty())
       t.FolderManager = new CArchiveFolderManager;
     else if (library.LoadAndCreateManager(plugin.FilePath, plugin.ClassID, &t.FolderManager) != S_OK)
       continue;
-#else
-      t.FolderManager = new CArchiveFolderManager;
-#endif
 
     t.OpenCallbackSpec = new COpenArchiveCallback;
     t.OpenCallback = t.OpenCallbackSpec;
@@ -161,9 +151,9 @@ HRESULT OpenFileFolderPlugin(
 
     UString progressTitle = LangString(IDS_OPENNING);
     t.OpenCallbackSpec->ProgressDialog.MainWindow = parentWindow;
-    t.OpenCallbackSpec->ProgressDialog.MainTitle = L"7-Zip"; // LangString(IDS_APP_TITLE);
+    t.OpenCallbackSpec->ProgressDialog.MainTitle = "7-Zip"; // LangString(IDS_APP_TITLE);
     t.OpenCallbackSpec->ProgressDialog.MainAddTitle = progressTitle + L' ';
-    // FIXME t.OpenCallbackSpec->ProgressDialog.WaitMode = true;
+    t.OpenCallbackSpec->ProgressDialog.WaitMode = true;
 
     {
       NWindows::CThread thread;
@@ -188,8 +178,6 @@ HRESULT OpenFileFolderPlugin(
     
     if (t.Result != S_FALSE)
       return t.Result;
-#ifdef _WIN32
   }
-#endif
   return S_FALSE;
 }

@@ -86,7 +86,7 @@ STDMETHODIMP CArchiveFolderManager::GetIconPath(const wchar_t *ext, BSTR *iconPa
 {
   *iconPath = 0;
   *iconIndex = 0;
-#ifdef _WIN32
+
   LoadFormats();
 
   #ifdef EXTERNAL_CODECS
@@ -114,7 +114,6 @@ STDMETHODIMP CArchiveFolderManager::GetIconPath(const wchar_t *ext, BSTR *iconPa
       return StringToBstr(fs2us(path), iconPath);
     }
   }
-#endif
   return S_OK;
 }
 

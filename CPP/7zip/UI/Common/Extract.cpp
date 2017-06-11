@@ -51,7 +51,7 @@ static HRESULT DecompressArchive(
       replaceName = arc0.DefaultName;
   }
 
-  outDir.Replace(FSTRING_ANY_MASK, us2fs(Get_Correct_FsFile_Name(replaceName)));
+  outDir.Replace(FString("*"), us2fs(Get_Correct_FsFile_Name(replaceName)));
 
   bool elimIsPossible = false;
   UString elimPrefix; // only pure name without dir delimiter
@@ -156,7 +156,7 @@ static HRESULT DecompressArchive(
   #endif
 
   if (outDir.IsEmpty())
-    outDir = FTEXT(".") FSTRING_PATH_SEPARATOR;
+    outDir = "." STRING_PATH_SEPARATOR;
   /*
   #ifdef _WIN32
   else if (NName::IsAltPathPrefix(outDir)) {}
@@ -167,7 +167,7 @@ static HRESULT DecompressArchive(
     HRESULT res = ::GetLastError();
     if (res == S_OK)
       res = E_FAIL;
-    errorMessage.SetFromAscii("Can not create output directory: ");
+    errorMessage = "Can not create output directory: ";
     errorMessage += fs2us(outDir);
     return res;
   }
@@ -263,7 +263,7 @@ HRESULT Extract(
     if (!options.StdInMode)
     {
       const FString &arcPath = us2fs(arcPaths[i]);
-      if (!fi.Find(arcPath,true))
+      if (!fi.Find(arcPath))
         throw "there is no such archive";
       if (fi.IsDir())
         throw "can't decompress folder";
@@ -306,7 +306,7 @@ HRESULT Extract(
     }
     else
     {
-      if (!fi.Find(us2fs(arcPath),true) || fi.IsDir())
+      if (!fi.Find(us2fs(arcPath)) || fi.IsDir())
         throw "there is no such archive";
     }
 
@@ -359,13 +359,10 @@ HRESULT Extract(
     op.stream = NULL;
     op.filePath = arcPath;
 
-    HRESULT result = arcLink.Open3(op, openCallback);
+    HRESULT result = arcLink.Open_Strict(op, openCallback);
 
     if (result == E_ABORT)
       return result;
-
-    if (result == S_OK && arcLink.NonOpen_ErrorInfo.ErrorFormatIndex >= 0)
-      result = S_FALSE;
 
     // arcLink.Set_ErrorsText();
     RINOK(extractCallback->OpenResult(codecs, arcLink, arcPath, result));

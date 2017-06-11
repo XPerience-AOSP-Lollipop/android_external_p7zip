@@ -6,8 +6,6 @@
 #include "../../../Common/MyCom.h"
 #include "../../../Common/Wildcard.h"
 
-#include "../../../Windows/FileDir.h"
-
 #include "../../IPassword.h"
 
 #include "../../Common/FileStreams.h"
@@ -59,6 +57,8 @@ struct CExtractNtOptions
   bool ReplaceColonForAltStream;
   bool WriteToAltStreamIfColon;
 
+  bool PreAllocateOutFile;
+
   CExtractNtOptions():
       ReplaceColonForAltStream(false),
       WriteToAltStreamIfColon(false)
@@ -66,6 +66,13 @@ struct CExtractNtOptions
     SymLinks.Val = true;
     HardLinks.Val = true;
     AltStreams.Val = true;
+    
+    PreAllocateOutFile =
+      #ifdef _WIN32
+        true;
+      #else
+        false;
+      #endif
   }
 };
 
@@ -86,7 +93,7 @@ public:
 
 #endif
 
-#if 0 // FIXME #ifndef _SFX
+#ifndef _SFX
 #ifndef UNDER_CE
 
 #define SUPPORT_LINKS
@@ -203,6 +210,7 @@ class CArchiveExtractCallback:
   UInt32 _index;
   UInt64 _curSize;
   bool _curSizeDefined;
+  bool _fileLengthWasSet;
   COutFileStream *_outFileStreamSpec;
   CMyComPtr<ISequentialOutStream> _outFileStream;
 
@@ -239,8 +247,6 @@ class CArchiveExtractCallback:
   bool _saclEnabled;
   #endif
 
-  CObjectVector<NWindows::NFile::NDir::CDelayedSymLink> _delayedSymLinks;
-  
   void CreateComplexDirectory(const UStringVector &dirPathParts, FString &fullPath);
   HRESULT GetTime(int index, PROPID propID, FILETIME &filetime, bool &filetimeIsDefined);
   HRESULT GetUnpackSize();

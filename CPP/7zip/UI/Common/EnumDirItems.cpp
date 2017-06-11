@@ -17,8 +17,6 @@
 
 #include "EnumDirItems.h"
 
-#define UNDER_CE 1 // FIXME
-
 using namespace NWindows;
 using namespace NFile;
 using namespace NName;
@@ -215,7 +213,8 @@ HRESULT CDirItems::EnumerateDir(int phyParent, int logParent, const FString &phy
 {
   RINOK(ScanProgress(phyPrefix));
 
-  NFind::CEnumerator enumerator(phyPrefix + FCHAR_ANY_MASK);
+  NFind::CEnumerator enumerator;
+  enumerator.SetDirPrefix(phyPrefix);
   for (unsigned ttt = 0; ; ttt++)
   {
     NFind::CFileInfo fi;
@@ -572,7 +571,7 @@ static HRESULT EnumerateDirItems(
               #endif
               */
 
-              fullPath = FCHAR_PATH_SEPARATOR;
+              fullPath = CHAR_PATH_SEPARATOR;
             }
             #if defined(_WIN32) && !defined(UNDER_CE)
             else if (item.IsDriveItem())
@@ -593,7 +592,7 @@ static HRESULT EnumerateDirItems(
         }
         else
         #endif
-        if (!fi.Find(fullPath,true))
+        if (!fi.Find(fullPath))
         {
           RINOK(dirItems.AddError(fullPath));
           continue;
@@ -684,7 +683,7 @@ static HRESULT EnumerateDirItems(
         {
           {
             if (nextNode.Name.IsEmpty())
-              fullPath = FCHAR_PATH_SEPARATOR;
+              fullPath = CHAR_PATH_SEPARATOR;
             #ifdef _WIN32
             else if (NWildcard::IsDriveColonName(nextNode.Name))
               fullPath.Add_PathSepar();
@@ -704,7 +703,7 @@ static HRESULT EnumerateDirItems(
         }
         else
         {
-          if (!fi.Find(fullPath,true))
+          if (!fi.Find(fullPath))
           {
             if (!nextNode.AreThereIncludeItems())
               continue;
@@ -775,7 +774,9 @@ static HRESULT EnumerateDirItems(
   #endif
   #endif
 
-  NFind::CEnumerator enumerator(phyPrefix + FCHAR_ANY_MASK);
+  NFind::CEnumerator enumerator;
+  enumerator.SetDirPrefix(phyPrefix);
+
   for (unsigned ttt = 0; ; ttt++)
   {
     NFind::CFileInfo fi;

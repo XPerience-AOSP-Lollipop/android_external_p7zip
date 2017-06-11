@@ -10,223 +10,21 @@
 #include "FileFind.h"
 #include "FileName.h"
 
-using namespace NWindows;
-using namespace NFile;
-using namespace NName;
-
-#include "../Common/StringConvert.h"
-#include "../Common/IntToString.h"
-
-#define NEED_NAME_WINDOWS_TO_UNIX
-#include "myPrivate.h"
-#include "Windows/Synchronization.h"
-
-#include <unistd.h> // rmdir
-#include <errno.h>
-
-#include <sys/stat.h> // mkdir
-#include <sys/types.h>
-#include <fcntl.h>
-
-#include <utime.h>
-
-// #define TRACEN(u) u;
-#define TRACEN(u)  /* */
-
-int g_filedir = 1;
-
-static NWindows::NSynchronization::CCriticalSection g_CountCriticalSection;
-
-class Umask
-{
-  public:
-  mode_t  current_umask;
-  mode_t  mask;
-  Umask() {
-    current_umask = umask (0);  /* get and set the umask */
-    umask(current_umask);   /* restore the umask */
-    mask = 0777 & (~current_umask);
-  }
-};
-
-static Umask gbl_umask;
-extern BOOLEAN WINAPI RtlTimeToSecondsSince1970( const LARGE_INTEGER *Time, DWORD *Seconds );
-
-
-#ifdef _UNICODE
-AString nameWindowToUnix2(LPCWSTR name) // FIXME : optimization ?
-{
-   AString astr = UnicodeStringToMultiByte(name);
-   return AString(nameWindowToUnix((const char *)astr));
-}
-#endif
-
-DWORD WINAPI GetFullPathNameW( LPCTSTR name, DWORD len, LPTSTR buffer, LPTSTR *lastpart ) { // FIXME
-  if (name == 0) return 0;
-
-  DWORD name_len = lstrlen(name);
-
-  if (name[0] == '/') {
-    DWORD ret = name_len+2;
-    if (ret >= len) {
-      TRACEN((printf("GetFullPathNameA(%ls,%d,)=0000 (case 0)\n",name, (int)len)))
-      return 0;
-    }
-    lstrcpy(buffer,L"c:");
-    lstrcat(buffer,name);
-
-    *lastpart=buffer;
-    TCHAR *ptr=buffer;
-    while (*ptr) {
-      if (*ptr == '/')
-        *lastpart=ptr+1;
-      ptr++;
-    }
-    TRACEN((printf("GetFullPathNameA(%ls,%d,%ls,%ls)=%d\n",name, (int)len,buffer, *lastpart,(int)ret)))
-    return ret;
-  }
-  if (isascii(name[0]) && (name[1] == ':')) { // FIXME isascii
-    DWORD ret = name_len;
-    if (ret >= len) {
-      TRACEN((printf("GetFullPathNameA(%ls,%d,)=0000 (case 1)\n",name, (int)len)))
-      return 0;
-    }
-    lstrcpy(buffer,name);
-
-    *lastpart=buffer;
-    TCHAR *ptr=buffer;
-    while (*ptr) {
-      if (*ptr == '/')
-        *lastpart=ptr+1;
-      ptr++;
-    }
-    TRACEN((printf("GetFullPathNameA(%ls,%d,%ls,%ls)=%d\n",name, (int)len,buffer, *lastpart,(int)ret)))
-    return ret;
-  }
-
-  // name is a relative pathname.
-  //
-  if (len < 2) {
-    TRACEN((printf("GetFullPathNameA(%ls,%d,)=0000 (case 2)\n",name, (int)len)))
-    return 0;
-  }
-
-  DWORD ret = 0;
-  char begin[MAX_PATHNAME_LEN];
-  /* DWORD begin_len = GetCurrentDirectoryA(MAX_PATHNAME_LEN,begin); */
-  DWORD begin_len = 0;
-  begin[0]='c';
-  begin[1]=':';
-  char * cret = getcwd(begin+2, MAX_PATHNAME_LEN - 3);
-  if (cret) {
-    begin_len = strlen(begin);
-  }
-
-  if (begin_len >= 1) {
-    //    strlen(begin) + strlen("/") + strlen(name)
-    ret = begin_len     +    1        + name_len;
-
-    if (ret >= len) {
-      TRACEN((printf("GetFullPathNameA(%ls,%d,)=0000 (case 4)\n",name, (int)len)))
-      return 0;
-    }
-    UString wbegin = GetUnicodeString(begin);
-    lstrcpy(buffer,wbegin);
-    lstrcat(buffer,L"/");
-    lstrcat(buffer,name);
-
-    *lastpart=buffer + begin_len + 1;
-    TCHAR *ptr=buffer;
-    while (*ptr) {
-      if (*ptr == '/')
-        *lastpart=ptr+1;
-      ptr++;
-    }
-    TRACEN((printf("GetFullPathNameA(%ls,%d,%ls,%ls)=%d\n",name, (int)len,buffer, *lastpart,(int)ret)))
-  } else {
-    ret = 0;
-    TRACEN((printf("GetFullPathNameA(%ls,%d,)=0000 (case 5)\n",name, (int)len)))
-  }
-  return ret;
-}
-
-static int copy_fd(int fin,int fout)
-{
-  char buffer[16384];
-  ssize_t ret_in;
-  ssize_t ret_out;
-
-  do {
-    ret_out = -1;
-    do {
-      ret_in = read(fin, buffer,sizeof(buffer));
-    } while (ret_in < 0 && (errno == EINTR));
-    if (ret_in >= 1) {
-      do {
-        ret_out = write (fout, buffer, ret_in);
-      } while (ret_out < 0 && (errno == EINTR));
-    } else if (ret_in == 0) {
-      ret_out = 0;
-    }
-  } while (ret_out >= 1);
-  return ret_out;
-}
-
-static BOOL CopyFile(const char *src,const char *dst)
-{
-  int ret = -1;
-
-#ifdef O_BINARY
-  int   flags = O_BINARY;
-#else
-  int   flags = 0;
-#endif
-
-#ifdef O_LARGEFILE
-  flags |= O_LARGEFILE;
-#endif
-
-  // printf("##DBG CopyFile(%s,%s)\n",src,dst);
-  int fout = open(dst,O_CREAT | O_WRONLY | O_EXCL | flags, 0600);
-  if (fout != -1)
-  {
-    int fin = open(src,O_RDONLY | flags , 0600);
-    if (fin != -1)
-    {
-      ret = copy_fd(fin,fout);
-      if (ret == 0) ret = close(fin);
-      else                close(fin);
-    }
-    if (ret == 0) ret = close(fout);
-    else                close(fout);
-  }
-  if (ret == 0) return TRUE;
-  return FALSE;
-}
-
-
 #ifndef _UNICODE
 extern bool g_IsNT;
 #endif
 
+using namespace NWindows;
+using namespace NFile;
+using namespace NName;
+
 namespace NWindows {
 namespace NFile {
-
-// SetCurrentDirectory doesn't support \\?\ prefix
-
-#ifdef WIN_LONG_PATH
-bool GetLongPathBase(CFSTR fileName, UString &res);
-bool GetLongPath(CFSTR fileName, UString &res);
-#endif
-
 namespace NDir {
-
-
-#ifdef _WIN32
 
 #ifndef UNDER_CE
 
-bool MyGetWindowsDirectory(FString &path)
+bool GetWindowsDir(FString &path)
 {
   UINT needLength;
   #ifndef _UNICODE
@@ -248,8 +46,7 @@ bool MyGetWindowsDirectory(FString &path)
   return (needLength > 0 && needLength <= MAX_PATH);
 }
 
-
-bool MyGetSystemDirectory(FString &path)
+bool GetSystemDir(FString &path)
 {
   UINT needLength;
   #ifndef _UNICODE
@@ -271,293 +68,370 @@ bool MyGetSystemDirectory(FString &path)
   return (needLength > 0 && needLength <= MAX_PATH);
 }
 #endif
-#endif // _WIN32
 
-bool SetDirTime(CFSTR fileName, const FILETIME * /* cTime */ , const FILETIME *aTime, const FILETIME *mTime)
+bool SetDirTime(CFSTR path, const FILETIME *cTime, const FILETIME *aTime, const FILETIME *mTime)
 {
-  AString  cfilename = UnicodeStringToMultiByte(fileName);
-  const char * unix_filename = nameWindowToUnix((const char *)cfilename);
-
-  struct utimbuf buf;
-
-  struct stat    oldbuf;
-  int ret = stat(unix_filename,&oldbuf);
-  if (ret == 0) {
-    buf.actime  = oldbuf.st_atime;
-    buf.modtime = oldbuf.st_mtime;
-  } else {
-    time_t current_time = time(0);
-    buf.actime  = current_time;
-    buf.modtime = current_time;
-  }
-
-  if (aTime)
+  #ifndef _UNICODE
+  if (!g_IsNT)
   {
-    LARGE_INTEGER  ltime;
-    DWORD dw;
-    ltime.QuadPart = aTime->dwHighDateTime;
-    ltime.QuadPart = (ltime.QuadPart << 32) | aTime->dwLowDateTime;
-    RtlTimeToSecondsSince1970( &ltime, &dw );
-    buf.actime = dw;
-  }
-
-  if (mTime)
-  {
-    LARGE_INTEGER  ltime;
-    DWORD dw;
-    ltime.QuadPart = mTime->dwHighDateTime;
-    ltime.QuadPart = (ltime.QuadPart << 32) | mTime->dwLowDateTime;
-    RtlTimeToSecondsSince1970( &ltime, &dw );
-    buf.modtime = dw;
-  }
-
-  /* ret = */ utime(unix_filename, &buf);
-
-  return true;
-}
-
-#ifdef WIN_LONG_PATH
-bool GetLongPaths(CFSTR s1, CFSTR s2, UString &d1, UString &d2)
-{
-  if (!GetLongPathBase(s1, d1) ||
-      !GetLongPathBase(s2, d2))
-    return false;
-  if (d1.IsEmpty() && d2.IsEmpty())
-    return false;
-  if (d1.IsEmpty()) d1 = fs2us(s1);
-  if (d2.IsEmpty()) d2 = fs2us(s2);
-  return true;
-}
-#endif
-
-static int convert_to_symlink(const char * name) {
-  TRACEN(printf("LINK(%s)\n",name))
-  FILE *file = fopen(name,"rb");
-  if (file) {
-    char buf[MAX_PATHNAME_LEN+1];
-    char * ret = fgets(buf,sizeof(buf)-1,file);
-    fclose(file);
-    if (ret) {
-      int ir = unlink(name);
-      if (ir == 0) {
-        ir = symlink(buf,name);
-        TRACEN(printf("TO(%s)\n",buf))
-      }
-      return ir;
-    }
-  }
-  return -1;
-}
-
-bool SetFileAttrib(CFSTR fileName, DWORD fileAttributes,CObjectVector<CDelayedSymLink> *delayedSymLinks)
-{
-  if (!fileName) {
-    SetLastError(ERROR_PATH_NOT_FOUND);
-    TRACEN((printf("SetFileAttrib(NULL,%d) : false-1\n",fileAttributes)))
+    ::SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return false;
   }
-#ifdef _UNICODE
-  AString name = nameWindowToUnix2(fileName);
-#else
-  const char * name = nameWindowToUnix(fileName);
-#endif
-  struct stat stat_info;
-#ifdef ENV_HAVE_LSTAT
-  if (global_use_lstat) {
-    if(lstat(name,&stat_info)!=0) {
-      TRACEN((printf("SetFileAttrib(%s,%d) : false-2-1\n",(const char *)name,fileAttributes)))
-      return false;
-    }
-  } else
-#endif
+  #endif
+  
+  HANDLE hDir = INVALID_HANDLE_VALUE;
+  IF_USE_MAIN_PATH
+    hDir = ::CreateFileW(fs2us(path), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  #ifdef WIN_LONG_PATH
+  if (hDir == INVALID_HANDLE_VALUE && USE_SUPER_PATH)
   {
-    if(stat(name,&stat_info)!=0) {
-      TRACEN((printf("SetFileAttrib(%s,%d) : false-2-2\n",(const char *)name,fileAttributes)))
-      return false;
-    }
+    UString superPath;
+    if (GetSuperPath(path, superPath, USE_MAIN_PATH))
+      hDir = ::CreateFileW(superPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
   }
+  #endif
 
-  if (fileAttributes & FILE_ATTRIBUTE_UNIX_EXTENSION) {
-     stat_info.st_mode = fileAttributes >> 16;
-#ifdef ENV_HAVE_LSTAT
-     if (S_ISLNK(stat_info.st_mode)) {
-         if (delayedSymLinks) {
-           delayedSymLinks->Add(CDelayedSymLink(name));
-         } else if ( convert_to_symlink(name) != 0) {
-          TRACEN((printf("SetFileAttrib(%s,%d) : false-3\n",(const char *)name,fileAttributes)))
-          return false;
-        }
-     } else
-#endif
-     if (S_ISREG(stat_info.st_mode)) {
-       TRACEN((printf("##DBG chmod-2(%s,%o)\n",(const char *)name,(unsigned)stat_info.st_mode & gbl_umask.mask)))
-       chmod(name,stat_info.st_mode & gbl_umask.mask);
-     } else if (S_ISDIR(stat_info.st_mode)) {
-       // user/7za must be able to create files in this directory
-       stat_info.st_mode |= (S_IRUSR | S_IWUSR | S_IXUSR);
-       TRACEN((printf("##DBG chmod-3(%s,%o)\n",(const char *)name,(unsigned)stat_info.st_mode & gbl_umask.mask)))
-       chmod(name,stat_info.st_mode & gbl_umask.mask);
-     }
-#ifdef ENV_HAVE_LSTAT
-  } else if (!S_ISLNK(stat_info.st_mode)) {
-    // do not use chmod on a link
-#else
-  } else {
-#endif
-
-    /* Only Windows Attributes */
-    if( S_ISDIR(stat_info.st_mode)) {
-       /* Remark : FILE_ATTRIBUTE_READONLY ignored for directory. */
-       TRACEN((printf("##DBG chmod-4(%s,%o)\n",(const char *)name,(unsigned)stat_info.st_mode & gbl_umask.mask)))
-       chmod(name,stat_info.st_mode & gbl_umask.mask);
-    } else {
-       if (fileAttributes & FILE_ATTRIBUTE_READONLY) stat_info.st_mode &= ~0222; /* octal!, clear write permission bits */
-       TRACEN((printf("##DBG chmod-5(%s,%o)\n",(const char *)name,(unsigned)stat_info.st_mode & gbl_umask.mask)))
-       chmod(name,stat_info.st_mode & gbl_umask.mask);
-    }
+  bool res = false;
+  if (hDir != INVALID_HANDLE_VALUE)
+  {
+    res = BOOLToBool(::SetFileTime(hDir, cTime, aTime, mTime));
+    ::CloseHandle(hDir);
   }
-  TRACEN((printf("SetFileAttrib(%s,%d) : true\n",(const char *)name,fileAttributes)))
+  return res;
+}
 
-  return true;
+bool SetFileAttrib(CFSTR path, DWORD attrib)
+{
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    if (::SetFileAttributes(fs2fas(path), attrib))
+      return true;
+  }
+  else
+  #endif
+  {
+    IF_USE_MAIN_PATH
+      if (::SetFileAttributesW(fs2us(path), attrib))
+        return true;
+    #ifdef WIN_LONG_PATH
+    if (USE_SUPER_PATH)
+    {
+      UString superPath;
+      if (GetSuperPath(path, superPath, USE_MAIN_PATH))
+        return BOOLToBool(::SetFileAttributesW(superPath, attrib));
+    }
+    #endif
+  }
+  return false;
 }
 
 bool RemoveDir(CFSTR path)
 {
-  if (!path || !*path) {
-    SetLastError(ERROR_PATH_NOT_FOUND);
-    return FALSE;
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    if (::RemoveDirectory(fs2fas(path)))
+      return true;
   }
-  AString name = nameWindowToUnix2(path);
-  TRACEN((printf("RemoveDirectoryA(%s)\n",(const char *)name)))
-
-  if (rmdir( (const char *)name ) != 0) {
-    return FALSE;
+  else
+  #endif
+  {
+    IF_USE_MAIN_PATH
+      if (::RemoveDirectoryW(fs2us(path)))
+        return true;
+    #ifdef WIN_LONG_PATH
+    if (USE_SUPER_PATH)
+    {
+      UString superPath;
+      if (GetSuperPath(path, superPath, USE_MAIN_PATH))
+        return BOOLToBool(::RemoveDirectoryW(superPath));
+    }
+    #endif
   }
-  return TRUE;
+  return false;
 }
 
-bool MyMoveFile(CFSTR existFileName, CFSTR newFileName)
+bool MyMoveFile(CFSTR oldFile, CFSTR newFile)
 {
-#ifdef _UNICODE
-  AString src = nameWindowToUnix2(existFileName);
-  AString dst = nameWindowToUnix2(newFileName);
-#else
-  const char * src = nameWindowToUnix(existFileName);
-  const char * dst = nameWindowToUnix(newFileName);
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    if (::MoveFile(fs2fas(oldFile), fs2fas(newFile)))
+      return true;
+  }
+  else
+  #endif
+  {
+    IF_USE_MAIN_PATH_2(oldFile, newFile)
+      if (::MoveFileW(fs2us(oldFile), fs2us(newFile)))
+        return true;
+    #ifdef WIN_LONG_PATH
+    if (USE_SUPER_PATH_2)
+    {
+      UString d1, d2;
+      if (GetSuperPaths(oldFile, newFile, d1, d2, USE_MAIN_PATH_2))
+        return BOOLToBool(::MoveFileW(d1, d2));
+    }
+    #endif
+  }
+  return false;
+}
+
+#ifndef UNDER_CE
+
+EXTERN_C_BEGIN
+typedef BOOL (WINAPI *Func_CreateHardLinkW)(
+    LPCWSTR lpFileName,
+    LPCWSTR lpExistingFileName,
+    LPSECURITY_ATTRIBUTES lpSecurityAttributes
+    );
+EXTERN_C_END
+
+bool MyCreateHardLink(CFSTR newFileName, CFSTR existFileName)
+{
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return false;
+    /*
+    if (::CreateHardLink(fs2fas(newFileName), fs2fas(existFileName), NULL))
+      return true;
+    */
+  }
+  else
+  #endif
+  {
+    Func_CreateHardLinkW my_CreateHardLinkW = (Func_CreateHardLinkW)
+        ::GetProcAddress(::GetModuleHandleW(L"kernel32.dll"), "CreateHardLinkW");
+    if (!my_CreateHardLinkW)
+      return false;
+    IF_USE_MAIN_PATH_2(newFileName, existFileName)
+      if (my_CreateHardLinkW(fs2us(newFileName), fs2us(existFileName), NULL))
+        return true;
+    #ifdef WIN_LONG_PATH
+    if (USE_SUPER_PATH_2)
+    {
+      UString d1, d2;
+      if (GetSuperPaths(newFileName, existFileName, d1, d2, USE_MAIN_PATH_2))
+        return BOOLToBool(my_CreateHardLinkW(d1, d2, NULL));
+    }
+    #endif
+  }
+  return false;
+}
+
 #endif
 
-  TRACEN((printf("MyMoveFile(%s,%s)\n",(const char *)src,(const char *)dst)))
+/*
+WinXP-64 CreateDir():
+  ""                  - ERROR_PATH_NOT_FOUND
+  \                   - ERROR_ACCESS_DENIED
+  C:\                 - ERROR_ACCESS_DENIED, if there is such drive,
+  
+  D:\folder             - ERROR_PATH_NOT_FOUND, if there is no such drive,
+  C:\nonExistent\folder - ERROR_PATH_NOT_FOUND
+  
+  C:\existFolder      - ERROR_ALREADY_EXISTS
+  C:\existFolder\     - ERROR_ALREADY_EXISTS
 
-  int ret = rename(src,dst);
-  if (ret != 0)
-  {
-    if (errno == EXDEV) // FIXED : bug #1112167 (Temporary directory must be on same partition as target)
-    {
-      BOOL bret = CopyFile(src,dst);
-      if (bret == FALSE) return false;
+  C:\folder   - OK
+  C:\folder\  - OK
 
-      struct stat info_file;
-      ret = stat(src,&info_file);
-      if (ret == 0) {
-    TRACEN((printf("##DBG chmod-1(%s,%o)\n",(const char *)dst,(unsigned)info_file.st_mode & gbl_umask.mask)))
-        ret = chmod(dst,info_file.st_mode & gbl_umask.mask);
-      }
-      if (ret == 0) {
-         ret = unlink(src);
-      }
-      if (ret == 0) return true;
-    }
-    return false;
-  }
-  return true;
-}
+  \\Server\nonExistent    - ERROR_BAD_NETPATH
+  \\Server\Share_Readonly - ERROR_ACCESS_DENIED
+  \\Server\Share          - ERROR_ALREADY_EXISTS
+
+  \\Server\Share_NTFS_drive - ERROR_ACCESS_DENIED
+  \\Server\Share_FAT_drive  - ERROR_ALREADY_EXISTS
+*/
 
 bool CreateDir(CFSTR path)
 {
-  if (!path || !*path) {
-    SetLastError(ERROR_PATH_NOT_FOUND);
-    return false;
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    if (::CreateDirectory(fs2fas(path), NULL))
+      return true;
   }
-
-#ifdef _UNICODE
-  AString name = nameWindowToUnix2(path);
-#else
-  const char * name = nameWindowToUnix(path);
-#endif
-  bool bret = false;
-  if (mkdir( name, 0700 ) == 0) bret = true;
-
-  TRACEN((printf("CreateDir(%s)=%d\n",(const char *)name,(int)bret)))
-  return bret;
+  else
+  #endif
+  {
+    IF_USE_MAIN_PATH
+      if (::CreateDirectoryW(fs2us(path), NULL))
+        return true;
+    #ifdef WIN_LONG_PATH
+    if ((!USE_MAIN_PATH || ::GetLastError() != ERROR_ALREADY_EXISTS) && USE_SUPER_PATH)
+    {
+      UString superPath;
+      if (GetSuperPath(path, superPath, USE_MAIN_PATH))
+        return BOOLToBool(::CreateDirectoryW(superPath, NULL));
+    }
+    #endif
+  }
+  return false;
 }
 
-bool CreateComplexDir(CFSTR _aPathName)
+/*
+  CreateDir2 returns true, if directory can contain files after the call (two cases):
+    1) the directory already exists
+    2) the directory was created
+  path must be WITHOUT trailing path separator.
+
+  We need CreateDir2, since fileInfo.Find() for reserved names like "com8"
+   returns FILE instead of DIRECTORY. And we need to use SuperPath */
+ 
+static bool CreateDir2(CFSTR path)
 {
-  AString name = nameWindowToUnix2(_aPathName);
-  TRACEN((printf("CreateComplexDir(%s)\n",(const char *)name)))
-
-
-  FString pathName = _aPathName;
-  int pos = pathName.ReverseFind(FCHAR_PATH_SEPARATOR);
-  if (pos > 0 && pos == pathName.Len() - 1)
+  #ifndef _UNICODE
+  if (!g_IsNT)
   {
-    if (pathName.Len() == 3 && pathName[1] == L':')
-      return true; // Disk folder;
-    pathName.Delete(pos);
+    if (::CreateDirectory(fs2fas(path), NULL))
+      return true;
   }
-  FString pathName2 = pathName;
-  pos = pathName.Len();
-  TRACEN((printf("CreateComplexDir(%s) pathName2=%ls\n",(const char *)name,(CFSTR)pathName2)))
+  else
+  #endif
+  {
+    IF_USE_MAIN_PATH
+      if (::CreateDirectoryW(fs2us(path), NULL))
+        return true;
+    #ifdef WIN_LONG_PATH
+    if ((!USE_MAIN_PATH || ::GetLastError() != ERROR_ALREADY_EXISTS) && USE_SUPER_PATH)
+    {
+      UString superPath;
+      if (GetSuperPath(path, superPath, USE_MAIN_PATH))
+      {
+        if (::CreateDirectoryW(superPath, NULL))
+          return true;
+        if (::GetLastError() != ERROR_ALREADY_EXISTS)
+          return false;
+        NFind::CFileInfo fi;
+        if (!fi.Find(us2fs(superPath)))
+          return false;
+        return fi.IsDir();
+      }
+    }
+    #endif
+  }
+  if (::GetLastError() != ERROR_ALREADY_EXISTS)
+    return false;
+  NFind::CFileInfo fi;
+  if (!fi.Find(path))
+    return false;
+  return fi.IsDir();
+}
+
+bool CreateComplexDir(CFSTR _path)
+{
+  #ifdef _WIN32
+  
+  {
+    DWORD attrib = NFind::GetFileAttrib(_path);
+    if (attrib != INVALID_FILE_ATTRIBUTES && (attrib & FILE_ATTRIBUTE_DIRECTORY) != 0)
+      return true;
+  }
+
+  #ifndef UNDER_CE
+  
+  if (IsDriveRootPath_SuperAllowed(_path))
+    return false;
+  
+  unsigned prefixSize = GetRootPrefixSize(_path);
+  
+  #endif
+  
+  #endif
+
+  FString path (_path);
+
+  int pos = path.ReverseFind_PathSepar();
+  if (pos >= 0 && (unsigned)pos == path.Len() - 1)
+  {
+    if (path.Len() == 1)
+      return true;
+    path.DeleteBack();
+  }
+
+  const FString path2 (path);
+  pos = path.Len();
+  
   for (;;)
   {
-    if (CreateDir(pathName))
+    if (CreateDir2(path))
       break;
-    TRACEN((printf("CreateComplexDir(%s) GetLastError=%d (ERROR_ALREADY_EXISTS=%d)\n",(const char *)name,::GetLastError(), ERROR_ALREADY_EXISTS)))
     if (::GetLastError() == ERROR_ALREADY_EXISTS)
-    {
-#ifdef _WIN32 // FIXED for supporting symbolic link instead of a directory
-      NFind::CFileInfo fileInfo;
-      if (!fileInfo.Find(pathName)) // For network folders
-        return true;
-      if (!fileInfo.IsDir())
-        return false;
-#endif
-      break;
-    }
-    pos = pathName.ReverseFind(FCHAR_PATH_SEPARATOR);
+      return false;
+    pos = path.ReverseFind_PathSepar();
     if (pos < 0 || pos == 0)
       return false;
-    if (pathName[pos - 1] == L':')
+    
+    #if defined(_WIN32) && !defined(UNDER_CE)
+    if (pos == 1 && IS_PATH_SEPAR(path[0]))
       return false;
-    pathName = pathName.Left(pos);
+    if (prefixSize >= (unsigned)pos + 1)
+      return false;
+    #endif
+    
+    path.DeleteFrom(pos);
   }
-  pathName = pathName2;
-  while (pos < pathName.Len())
+  
+  while (pos < (int)path2.Len())
   {
-    pos = pathName.Find(FCHAR_PATH_SEPARATOR, pos + 1);
-    if (pos < 0)
-      pos = pathName.Len();
-    if (!CreateDir(pathName.Left(pos)))
+    int pos2 = NName::FindSepar(path2.Ptr(pos + 1));
+    if (pos2 < 0)
+      pos = path2.Len();
+    else
+      pos += 1 + pos2;
+    path.SetFrom(path2, pos);
+    if (!CreateDir(path))
       return false;
   }
+  
   return true;
 }
 
-bool DeleteFileAlways(CFSTR name)
+bool DeleteFileAlways(CFSTR path)
 {
-  if (!name || !*name) {
-    SetLastError(ERROR_PATH_NOT_FOUND);
-    return false;
+  /* If alt stream, we also need to clear READ-ONLY attribute of main file before delete.
+     SetFileAttrib("name:stream", ) changes attributes of main file. */
+  {
+    DWORD attrib = NFind::GetFileAttrib(path);
+    if (attrib != INVALID_FILE_ATTRIBUTES
+        && (attrib & FILE_ATTRIBUTE_DIRECTORY) == 0
+        && (attrib & FILE_ATTRIBUTE_READONLY) != 0)
+    {
+      if (!SetFileAttrib(path, attrib & ~FILE_ATTRIBUTE_READONLY))
+        return false;
+    }
   }
-#ifdef _UNICODE
-   AString unixname = nameWindowToUnix2(name);
-#else
-   const char * unixname = nameWindowToUnix(name);
-#endif
-   bool bret = false;
-   if (remove(unixname) == 0) bret = true;
-   TRACEN((printf("DeleteFileAlways(%s)=%d\n",(const char *)unixname,(int)bret)))
-   return bret;
+
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    if (::DeleteFile(fs2fas(path)))
+      return true;
+  }
+  else
+  #endif
+  {
+    /* DeleteFile("name::$DATA") deletes all alt streams (same as delete DeleteFile("name")).
+       Maybe it's better to open "name::$DATA" and clear data for unnamed stream? */
+    IF_USE_MAIN_PATH
+      if (::DeleteFileW(fs2us(path)))
+        return true;
+    #ifdef WIN_LONG_PATH
+    if (USE_SUPER_PATH)
+    {
+      UString superPath;
+      if (GetSuperPath(path, superPath, USE_MAIN_PATH))
+        return BOOLToBool(::DeleteFileW(superPath));
+    }
+    #endif
+  }
+  return false;
 }
 
 bool RemoveDirWithSubItems(const FString &path)
@@ -578,11 +452,11 @@ bool RemoveDirWithSubItems(const FString &path)
 
   if (needRemoveSubItems)
   {
-    FString s = path;
-    s += FCHAR_PATH_SEPARATOR;
-    unsigned prefixSize = s.Len();
-    s += FCHAR_ANY_MASK;
-    NFind::CEnumerator enumerator(s);
+    FString s (path);
+    s.Add_PathSepar();
+    const unsigned prefixSize = s.Len();
+    NFind::CEnumerator enumerator;
+    enumerator.SetDirPrefix(s);
     NFind::CFileInfo fi;
     while (enumerator.Next(fi))
     {
@@ -597,30 +471,7 @@ bool RemoveDirWithSubItems(const FString &path)
         return false;
     }
   }
-
-  if (!SetFileAttrib(path, 0))
-    return false;
-  return RemoveDir(path);
-}
-
-
-bool RemoveDirectoryWithSubItems(const FString &path); // FIXME
-static bool RemoveDirectorySubItems2(const FString pathPrefix, const NFind::CFileInfo &fileInfo)
-{
-  if (fileInfo.IsDir())
-    return RemoveDirectoryWithSubItems(pathPrefix + fileInfo.Name);
-  return DeleteFileAlways(pathPrefix + fileInfo.Name);
-}
-bool RemoveDirectoryWithSubItems(const FString &path)
-{
-  NFind::CFileInfo fileInfo;
-  FString pathPrefix = path + FCHAR_PATH_SEPARATOR;
-  {
-    NFind::CEnumerator enumerator(pathPrefix + FCHAR_ANY_MASK);
-    while (enumerator.Next(fileInfo))
-      if (!RemoveDirectorySubItems2(pathPrefix, fileInfo))
-        return false;
-  }
+  
   if (!SetFileAttrib(path, 0))
     return false;
   return RemoveDir(path);
@@ -628,9 +479,9 @@ bool RemoveDirectoryWithSubItems(const FString &path)
 
 #ifdef UNDER_CE
 
-bool MyGetFullPathName(CFSTR fileName, FString &resFullPath)
+bool MyGetFullPathName(CFSTR path, FString &resFullPath)
 {
-  resFullPath = fileName;
+  resFullPath = path;
   return true;
 }
 
@@ -643,27 +494,40 @@ bool MyGetFullPathName(CFSTR path, FString &resFullPath)
 
 bool SetCurrentDir(CFSTR path)
 {
-   AString apath = UnicodeStringToMultiByte(path);
-
-   return chdir((const char*)apath) == 0;
+  // SetCurrentDirectory doesn't support \\?\ prefix
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    return BOOLToBool(::SetCurrentDirectory(fs2fas(path)));
+  }
+  else
+  #endif
+  {
+    return BOOLToBool(::SetCurrentDirectoryW(fs2us(path)));
+  }
 }
 
 bool GetCurrentDir(FString &path)
 {
-  char begin[MAX_PATHNAME_LEN];
-  begin[0]='c';
-  begin[1]=':';
-  char * cret = getcwd(begin+2, MAX_PATHNAME_LEN - 3);
-  if (cret)
+  path.Empty();
+  DWORD needLength;
+  #ifndef _UNICODE
+  if (!g_IsNT)
   {
-#ifdef _UNICODE
-    path = GetUnicodeString(begin);
-#else
-    path = begin;
-#endif
-    return true;
+    TCHAR s[MAX_PATH + 2];
+    s[0] = 0;
+    needLength = ::GetCurrentDirectory(MAX_PATH + 1, s);
+    path = fas2fs(s);
   }
-  return false;
+  else
+  #endif
+  {
+    WCHAR s[MAX_PATH + 2];
+    s[0] = 0;
+    needLength = ::GetCurrentDirectoryW(MAX_PATH + 1, s);
+    path = us2fs(s);
+  }
+  return (needLength > 0 && needLength <= MAX_PATH);
 }
 
 #endif
@@ -673,7 +537,7 @@ bool GetFullPathAndSplit(CFSTR path, FString &resDirPrefix, FString &resFileName
   bool res = MyGetFullPathName(path, resDirPrefix);
   if (!res)
     resDirPrefix = path;
-  int pos = resDirPrefix.ReverseFind(FCHAR_PATH_SEPARATOR);
+  int pos = resDirPrefix.ReverseFind_PathSepar();
   resFileName = resDirPrefix.Ptr(pos + 1);
   resDirPrefix.DeleteFrom(pos + 1);
   return res;
@@ -687,42 +551,47 @@ bool GetOnlyDirPrefix(CFSTR path, FString &resDirPrefix)
 
 bool MyGetTempPath(FString &path)
 {
-  path = L"c:/tmp/"; // final '/' is needed
-  return true;
+  path.Empty();
+  DWORD needLength;
+  #ifndef _UNICODE
+  if (!g_IsNT)
+  {
+    TCHAR s[MAX_PATH + 2];
+    s[0] = 0;
+    needLength = ::GetTempPath(MAX_PATH + 1, s);
+    path = fas2fs(s);
+  }
+  else
+  #endif
+  {
+    WCHAR s[MAX_PATH + 2];
+    s[0] = 0;
+    needLength = ::GetTempPathW(MAX_PATH + 1, s);;
+    path = us2fs(s);
+  }
+  return (needLength > 0 && needLength <= MAX_PATH);
 }
 
 static bool CreateTempFile(CFSTR prefix, bool addRandom, FString &path, NIO::COutFile *outFile)
 {
-#ifdef _WIN32
   UInt32 d = (GetTickCount() << 12) ^ (GetCurrentThreadId() << 14) ^ GetCurrentProcessId();
-#else
-  static UInt32 memo_count = 0;
-  UInt32 count;
-
-  g_CountCriticalSection.Enter();
-  count = memo_count++;
-  g_CountCriticalSection.Leave();
-  UINT number = (UINT)getpid();
-
-  UInt32 d = (GetTickCount() << 12) ^ (count << 14) ^ number;
-#endif
   for (unsigned i = 0; i < 100; i++)
   {
     path = prefix;
     if (addRandom)
     {
-      FChar s[16];
-      UInt32 value = d;
+      char s[16];
+      UInt32 val = d;
       unsigned k;
       for (k = 0; k < 8; k++)
       {
-        unsigned t = value & 0xF;
-        value >>= 4;
+        unsigned t = val & 0xF;
+        val >>= 4;
         s[k] = (char)((t < 10) ? ('0' + t) : ('A' + (t - 10)));
       }
       s[k] = '\0';
       if (outFile)
-        path += FChar('.');
+        path += '.';
       path += s;
       UInt32 step = GetTickCount() + 2;
       if (step == 0)
@@ -731,7 +600,7 @@ static bool CreateTempFile(CFSTR prefix, bool addRandom, FString &path, NIO::COu
     }
     addRandom = true;
     if (outFile)
-      path += FTEXT(".tmp");
+      path += ".tmp";
     if (NFind::DoesFileOrDirExist(path))
     {
       SetLastError(ERROR_ALREADY_EXISTS);
@@ -814,66 +683,8 @@ bool CTempDir::Remove()
 {
   if (!_mustBeDeleted)
     return true;
-  _mustBeDeleted = !RemoveDirectoryWithSubItems(_path);
+  _mustBeDeleted = !RemoveDirWithSubItems(_path);
   return !_mustBeDeleted;
 }
 
-#ifdef ENV_UNIX
-
-CDelayedSymLink::CDelayedSymLink(const char * source)
-  : _source(source)
-{
-  struct stat st;
-
-  if (lstat(_source, &st) == 0) {
-    _dev = st.st_dev;
-    _ino = st.st_ino;
-  } else {
-    _dev = 0;
-  }
-}
-
-bool CDelayedSymLink::Create()
-{
-  struct stat st;
-
-  if (_dev == 0) {
-    errno = EPERM;
-    return false;
-  }
-  if (lstat(_source, &st) != 0)
-    return false;
-  if (_dev != st.st_dev || _ino != st.st_ino) {
-    // Placeholder file has been overwritten or moved by another
-    // symbolic link creation
-    errno = EPERM;
-    return false;
-  }
-
-  return convert_to_symlink(_source) == 0;
-}
-
-#endif // ENV_UNIX
-
 }}}
-
-#ifndef _SFX
-
-namespace NWindows {
-namespace NDLL {
-
-FString GetModuleDirPrefix()
-{
-  FString s;
-
-  const char *p7zip_home_dir = getenv("P7ZIP_HOME_DIR");
-  if (p7zip_home_dir) {
-    return MultiByteToUnicodeString(p7zip_home_dir,CP_ACP);
-  }
-
-  return FTEXT(".") FSTRING_PATH_SEPARATOR;
-}
-
-}}
-
-#endif

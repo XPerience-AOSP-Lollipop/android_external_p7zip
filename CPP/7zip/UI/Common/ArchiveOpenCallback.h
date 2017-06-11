@@ -93,7 +93,7 @@ public:
   void Init(const FString &folderPrefix, const FString &fileName)
   {
     _folderPrefix = folderPrefix;
-    if (!_fileInfo.Find(_folderPrefix + fileName,true))
+    if (!_fileInfo.Find(_folderPrefix + fileName))
       throw 20121118;
     FileNames.Clear();
     FileNames_WasUsed.Clear();

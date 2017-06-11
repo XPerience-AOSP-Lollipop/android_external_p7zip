@@ -14,7 +14,6 @@
 #include "../../../Windows/FileDir.h"
 #include "../../../Windows/FileName.h"
 #include "../../../Windows/PropVariant.h"
-#include "../../../Windows/Synchronization.h"
 
 #include "../../Common/StreamObjects.h"
 
@@ -52,6 +51,8 @@ CArchiveUpdateCallback::CArchiveUpdateCallback():
     ArcItems(NULL),
     UpdatePairs(NULL),
     NewNames(NULL),
+    CommentIndex(-1),
+    Comment(NULL),
     
     ShareForWrite(false),
     StdInMode(false),
@@ -250,7 +251,7 @@ STDMETHODIMP CArchiveUpdateCallback::GetRawProp(UInt32 index, PROPID propID, con
         // propID == kpidNtReparse
         if (!StoreSymLinks)
           return S_OK;
-        #if 0 // #ifndef UNDER_CE
+        #ifndef UNDER_CE
         const CByteBuffer *buf = &di.ReparseData2;
         if (buf->Size() == 0)
           buf = &di.ReparseData;
@@ -301,7 +302,7 @@ static UString GetRelativePath(const UString &to, const UString &from)
   unsigned k;
   
   for (k = i + 1; k < partsFrom.Size(); k++)
-    s += L".." WSTRING_PATH_SEPARATOR;
+    s += ".." STRING_PATH_SEPARATOR;
   
   for (k = i; k < partsTo.Size(); k++)
   {
@@ -340,7 +341,7 @@ STDMETHODIMP CArchiveUpdateCallback::GetProperty(UInt32 index, PROPID propID, PR
       }
       if (up.DirIndex >= 0)
       {
-        #if 0 // #ifndef UNDER_CE
+        #ifndef UNDER_CE
         const CDirItem &di = DirItems->Items[up.DirIndex];
         // if (di.IsDir())
         {
@@ -397,6 +398,11 @@ STDMETHODIMP CArchiveUpdateCallback::GetProperty(UInt32 index, PROPID propID, PR
   }
   else if (propID == kpidPath && up.NewNameIndex >= 0)
     prop = (*NewNames)[up.NewNameIndex];
+  else if (propID == kpidComment
+      && CommentIndex >= 0
+      && (unsigned)CommentIndex == index
+      && Comment)
+    prop = *Comment;
   else if (propID == kpidShortName && up.NewNameIndex >= 0 && up.IsMainRenameItem)
   {
     // we can generate new ShortName here;
@@ -509,7 +515,6 @@ STDMETHODIMP CArchiveUpdateCallback::GetStream2(UInt32 index, ISequentialInStrea
       return Callback->OpenFileError(path, ::GetLastError());
     }
 
-#ifdef _WIN32 // FIXME
     if (StoreHardLinks)
     {
       CStreamFileProps props;
@@ -534,7 +539,6 @@ STDMETHODIMP CArchiveUpdateCallback::GetStream2(UInt32 index, ISequentialInStrea
         }
       }
     }
-#endif
 
     if (ProcessedItemsStatuses)
     {
@@ -693,13 +697,13 @@ STDMETHODIMP CArchiveUpdateCallback::GetVolumeSize(UInt32 index, UInt64 *size)
 STDMETHODIMP CArchiveUpdateCallback::GetVolumeStream(UInt32 index, ISequentialOutStream **volumeStream)
 {
   COM_TRY_BEGIN
-  FChar temp[16];
+  char temp[16];
   ConvertUInt32ToString(index + 1, temp);
-  FString res = temp;
+  FString res (temp);
   while (res.Len() < 2)
     res.InsertAtFront(FTEXT('0'));
   FString fileName = VolName;
-  fileName += FTEXT('.');
+  fileName += '.';
   fileName += res;
   fileName += VolExt;
   COutFileStream *streamSpec = new COutFileStream;
@@ -727,7 +731,6 @@ STDMETHODIMP CArchiveUpdateCallback::CryptoGetTextPassword(BSTR *password)
 
 HRESULT CArchiveUpdateCallback::InFileStream_On_Error(UINT_PTR val, DWORD error)
 {
-#ifdef _WIN32 // FIXME
   if (error == ERROR_LOCK_VIOLATION)
   {
     MT_LOCK
@@ -741,7 +744,6 @@ HRESULT CArchiveUpdateCallback::InFileStream_On_Error(UINT_PTR val, DWORD error)
       }
     }
   }
-#endif
   return HRESULT_FROM_WIN32(error);
 }
 

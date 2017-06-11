@@ -143,7 +143,7 @@ bool CExtractDialog::OnInit()
       GetText(s);
     if (!ArcPath.IsEmpty())
     {
-      s.AddAscii(" : ");
+      s += " : ";
       s += ArcPath;
     }
     SetText(s);
@@ -230,10 +230,8 @@ bool CExtractDialog::OnInit()
 
   #endif
 
-#ifdef _WIN32
   HICON icon = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_ICON));
   SetIcon(ICON_BIG, icon);
-#endif
  
   // CWindow filesWindow = GetItem(IDC_EXTRACT_RADIO_FILES);
   // filesWindow.Enable(_enableFilesButton);
@@ -411,10 +409,10 @@ void CExtractDialog::OnOK()
 }
 
 #ifndef NO_REGISTRY
-static LPCWSTR kHelpTopic = L"fm/plugins/7-zip/extract.htm";
+#define kHelpTopic "fm/plugins/7-zip/extract.htm"
 void CExtractDialog::OnHelp()
 {
-  ShowHelpWindow(NULL, kHelpTopic);
+  ShowHelpWindow(kHelpTopic);
   CModalDialog::OnHelp();
 }
 #endif

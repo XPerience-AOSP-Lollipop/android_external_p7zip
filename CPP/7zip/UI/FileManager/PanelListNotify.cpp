@@ -19,6 +19,18 @@
 
 using namespace NWindows;
 
+/* Unicode characters for space:
+0x009C STRING TERMINATOR
+0x00B7 Middle dot
+0x237D Shouldered open box
+0x2420 Symbol for space
+0x2422 Blank symbol
+0x2423 Open box
+*/
+
+#define SPACE_REPLACE_CHAR (wchar_t)(0x2423)
+#define SPACE_TERMINATOR_CHAR (wchar_t)(0x9C)
+
 #define INT_TO_STR_SPEC(v) \
   while (v >= 10) { temp[i++] = (unsigned char)('0' + (unsigned)(v % 10)); v /= 10; } \
   *s++ = (unsigned char)('0' + (unsigned)v);
@@ -27,7 +39,7 @@ static void ConvertSizeToString(UInt64 val, wchar_t *s) throw()
 {
   unsigned char temp[32];
   unsigned i = 0;
-
+  
   if (val <= (UInt32)0xFFFFFFFF)
   {
     UInt32 val32 = (UInt32)val;
@@ -42,7 +54,7 @@ static void ConvertSizeToString(UInt64 val, wchar_t *s) throw()
   {
     if (i != 0)
     {
-      *s++ = temp[i - 1];
+      *s++ = temp[(size_t)i - 1];
       if (i == 2)
         *s++ = temp[0];
     }
@@ -62,13 +74,13 @@ static void ConvertSizeToString(UInt64 val, wchar_t *s) throw()
   do
   {
     s[0] = ' ';
-    s[1] = temp[i - 1];
-    s[2] = temp[i - 2];
-    s[3] = temp[i - 3];
+    s[1] = temp[(size_t)i - 1];
+    s[2] = temp[(size_t)i - 2];
+    s[3] = temp[(size_t)i - 3];
     s += 4;
   }
   while (i -= 3);
-
+  
   *s = 0;
 }
 
@@ -174,8 +186,8 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
 
   if (item.cchTextMax <= 1)
     return 0;
-
-  const CItemProperty &property = _visibleProperties[item.iSubItem];
+  
+  const CPropColumn &property = _visibleColumns[item.iSubItem];
   PROPID propID = property.ID;
 
   if (realIndex == kParentIndex)
@@ -192,7 +204,7 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
     return 0;
   }
 
-
+ 
   if (property.IsRawProp)
   {
     const void *data;
@@ -205,8 +217,7 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
       text[0] = 0;
       return 0;
     }
-
-#ifdef _WIN32
+    
     if (propID == kpidNtReparse)
     {
       UString s;
@@ -225,7 +236,6 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
         return 0;
       }
     }
-#endif
     else if (propID == kpidNtSecure)
     {
       AString s;
@@ -322,34 +332,34 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
       const wchar_t *name = NULL;
       unsigned nameLen = 0;
       _folderGetItemName->GetItemName(realIndex, &name, &nameLen);
-
+      
       if (name)
       {
         unsigned dest = 0;
         unsigned limit = item.cchTextMax - 1;
-
+        
         for (unsigned i = 0; dest < limit;)
         {
           wchar_t c = name[i++];
           if (c == 0)
             break;
           text[dest++] = c;
-
+          
           if (c != ' ')
           {
             if (c != 0x202E) // RLO
               continue;
-            text[dest - 1] = '_';
+            text[(size_t)dest - 1] = '_';
             continue;
           }
-
-          if (name[i + 1] != ' ')
+          
+          if (name[i] != ' ')
             continue;
-
-          unsigned t = 2;
+          
+          unsigned t = 1;
           for (; name[i + t] == ' '; t++);
 
-          if (t >= 4 && dest + 4 <= limit)
+          if (t >= 4 && dest + 4 < limit)
           {
             text[dest++] = '.';
             text[dest++] = '.';
@@ -359,12 +369,26 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
           }
         }
 
+        if (dest == 0)
+          text[dest++]= '_';
+
+        #ifdef _WIN32
+        else if (text[(size_t)dest - 1] == ' ')
+        {
+          if (dest < limit)
+            text[dest++] = SPACE_TERMINATOR_CHAR;
+          else
+            text[dest - 1] = SPACE_REPLACE_CHAR;
+        }
+        #endif
+
         text[dest] = 0;
+        // OutputDebugStringW(text);
         return 0;
       }
     }
   }
-
+  
   if (propID == kpidPrefix)
   {
     if (_folderGetItemName)
@@ -388,13 +412,13 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
       }
     }
   }
-
+  
   HRESULT res = _folder->GetProperty(realIndex, propID, &prop);
-
+  
   if (res != S_OK)
   {
     MyStringCopy(text, L"Error: ");
-    // s = UString(L"Error: ") + HResultToMessage(res);
+    // s = UString("Error: ") + HResultToMessage(res);
   }
   else if ((prop.vt == VT_UI8 || prop.vt == VT_UI4 || prop.vt == VT_UI2) && IsSizeProp(propID))
   {
@@ -420,7 +444,7 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
   else
   {
     char temp[64];
-    ConvertPropertyToShortString(temp, prop, propID, false);
+    ConvertPropertyToShortString2(temp, prop, propID, _timestampLevel);
     unsigned i;
     unsigned limit = item.cchTextMax - 1;
     for (i = 0; i < limit; i++)
@@ -432,7 +456,7 @@ LRESULT CPanel::SetItemText(LVITEMW &item)
     }
     text[i] = 0;
   }
-
+  
   return 0;
 }
 
@@ -449,17 +473,13 @@ void CPanel::OnItemChanged(NMLISTVIEW *item)
   bool newSelected = (item->uNewState & LVIS_SELECTED) != 0;
   // Don't change this code. It works only with such check
   if (oldSelected != newSelected)
-  {
-      printf("CPanel::OnItemChanged : _selectedStatusVector[%d]= %d %d => %d\n",index,_selectedStatusVector[index],oldSelected,newSelected);
     _selectedStatusVector[index] = newSelected;
-  }
 }
 
 extern bool g_LVN_ITEMACTIVATE_Support;
 
 void CPanel::OnNotifyActivateItems()
 {
-#ifdef _WIN32
   bool alt = IsKeyDown(VK_MENU);
   bool ctrl = IsKeyDown(VK_CONTROL);
   bool shift = IsKeyDown(VK_SHIFT);
@@ -467,9 +487,6 @@ void CPanel::OnNotifyActivateItems()
     Properties();
   else
     OpenSelectedItems(!shift || alt || ctrl);
-#else
-    OpenSelectedItems(true);
-#endif
 }
 
 bool CPanel::OnNotifyList(LPNMHDR header, LRESULT &result)
@@ -482,7 +499,7 @@ bool CPanel::OnNotifyList(LPNMHDR header, LRESULT &result)
       {
         if (!_mySelectMode)
           OnItemChanged((LPNMLISTVIEW)header);
-
+        
         // Post_Refresh_StatusBar();
         /* 9.26: we don't call Post_Refresh_StatusBar.
            it was very slow if we select big number of files
@@ -501,7 +518,6 @@ bool CPanel::OnNotifyList(LPNMHDR header, LRESULT &result)
       }
     */
 
-#ifdef _WIN32
     case LVN_GETDISPINFOW:
     {
       LV_DISPINFOW *dispInfo = (LV_DISPINFOW *)header;
@@ -528,13 +544,11 @@ bool CPanel::OnNotifyList(LPNMHDR header, LRESULT &result)
       }
       return boolResult;
     }
-#endif
 
     case LVN_COLUMNCLICK:
       OnColumnClick(LPNMLISTVIEW(header));
       return false;
 
-#ifdef _WIN32
     case LVN_ITEMACTIVATE:
       if (g_LVN_ITEMACTIVATE_Support)
       {
@@ -542,17 +556,15 @@ bool CPanel::OnNotifyList(LPNMHDR header, LRESULT &result)
         return false;
       }
       break;
-#endif
     case NM_DBLCLK:
-    // FIXME case NM_RETURN:
-      // FIXME if (!g_LVN_ITEMACTIVATE_Support)
+    case NM_RETURN:
+      if (!g_LVN_ITEMACTIVATE_Support)
       {
         OnNotifyActivateItems();
         return false;
       }
       break;
 
-#ifdef _WIN32
     case NM_RCLICK:
       Post_Refresh_StatusBar();
       break;
@@ -564,7 +576,7 @@ bool CPanel::OnNotifyList(LPNMHDR header, LRESULT &result)
       case NM_CLICK:
       SendRefreshStatusBarMessage();
       return 0;
-
+      
         // TODO : Handler default action...
         return 0;
         case LVN_ITEMCHANGED:
@@ -610,12 +622,10 @@ bool CPanel::OnNotifyList(LPNMHDR header, LRESULT &result)
       break;
     }
     // case LVN_BEGINRDRAG:
-#endif
   }
   return false;
 }
 
-#ifdef _WIN32
 bool CPanel::OnCustomDraw(LPNMLVCUSTOMDRAW lplvcd, LRESULT &result)
 {
   switch (lplvcd->nmcd.dwDrawStage)
@@ -623,7 +633,7 @@ bool CPanel::OnCustomDraw(LPNMLVCUSTOMDRAW lplvcd, LRESULT &result)
   case CDDS_PREPAINT :
     result = CDRF_NOTIFYITEMDRAW;
     return true;
-
+    
   case CDDS_ITEMPREPAINT:
     /*
     SelectObject(lplvcd->nmcd.hdc,
@@ -651,7 +661,7 @@ bool CPanel::OnCustomDraw(LPNMLVCUSTOMDRAW lplvcd, LRESULT &result)
     // result = CDRF_NEWFONT;
     result = CDRF_NOTIFYITEMDRAW;
     return true;
-
+    
     // return false;
     // return true;
     /*
@@ -676,11 +686,9 @@ bool CPanel::OnCustomDraw(LPNMLVCUSTOMDRAW lplvcd, LRESULT &result)
   }
   return false;
 }
-#endif
 
 void CPanel::Refresh_StatusBar()
 {
-#ifdef _WIN32
   /*
   g_name_cnt++;
   char s[256];
@@ -730,7 +738,7 @@ void CPanel::Refresh_StatusBar()
       {
         char dateString2[32];
         dateString2[0] = 0;
-        ConvertPropertyToShortString(dateString2, prop, kpidMTime, false);
+        ConvertPropertyToShortString2(dateString2, prop, kpidMTime);
         for (unsigned i = 0;; i++)
         {
           char c = dateString2[i];
@@ -743,7 +751,7 @@ void CPanel::Refresh_StatusBar()
   }
   _statusBar.SetText(2, sizeString);
   _statusBar.SetText(3, dateString);
-
+  
   // _statusBar.SetText(4, nameString);
   // _statusBar2.SetText(1, MyFormatNew(L"{0} bytes", NumberToStringW(totalSize)));
   // }
@@ -752,5 +760,4 @@ void CPanel::Refresh_StatusBar()
   sprintf(s, "status = %8d ms", dw);
   OutputDebugStringA(s);
   */
-#endif
 }

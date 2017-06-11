@@ -3,12 +3,9 @@
 #ifndef __WINDOWS_SYNCHRONIZATION_H
 #define __WINDOWS_SYNCHRONIZATION_H
 
-#include "Defs.h"
-
-extern "C" 
-{ 
 #include "../../C/Threads.h"
-}
+
+#include "Defs.h"
 
 #ifdef _WIN32
 #include "Handle.h"
@@ -17,42 +14,28 @@ extern "C"
 namespace NWindows {
 namespace NSynchronization {
 
-class Uncopyable {
-protected: 
-  Uncopyable() {} // allow construction
-  ~Uncopyable() {} // and destruction of derived objects...
-private:
-  Uncopyable(const Uncopyable&);             // ...but prevent copying
-  Uncopyable& operator=(const Uncopyable&);
-};
-
-
-class CBaseEvent // FIXME : private Uncopyable
+class CBaseEvent
 {
 protected:
   ::CEvent _object;
 public:
   bool IsCreated() { return Event_IsCreated(&_object) != 0; }
-#ifdef _WIN32
-  operator HANDLE() { return _object.handle; }
-#endif
+  operator HANDLE() { return _object; }
   CBaseEvent() { Event_Construct(&_object); }
   ~CBaseEvent() { Close(); }
   WRes Close() { return Event_Close(&_object); }
   #ifdef _WIN32
-  WRes Create(bool manualReset, bool initiallyOwn, LPCTSTR name = NULL,
-      LPSECURITY_ATTRIBUTES securityAttributes = NULL)
+  WRes Create(bool manualReset, bool initiallyOwn, LPCTSTR name = NULL, LPSECURITY_ATTRIBUTES sa = NULL)
   {
-    _object.handle = ::CreateEvent(securityAttributes, BoolToBOOL(manualReset),
-        BoolToBOOL(initiallyOwn), name);
-    if (_object.handle != 0)
+    _object = ::CreateEvent(sa, BoolToBOOL(manualReset), BoolToBOOL(initiallyOwn), name);
+    if (name == NULL && _object != 0)
       return 0;
     return ::GetLastError();
   }
   WRes Open(DWORD desiredAccess, bool inheritHandle, LPCTSTR name)
   {
-    _object.handle = ::OpenEvent(desiredAccess, BoolToBOOL(inheritHandle), name);
-    if (_object.handle != 0)
+    _object = ::OpenEvent(desiredAccess, BoolToBOOL(inheritHandle), name);
+    if (_object != 0)
       return 0;
     return ::GetLastError();
   }
@@ -110,14 +93,14 @@ public:
 class CMutex: public CObject
 {
 public:
-  WRes Create(bool initiallyOwn, LPCTSTR name = NULL,
-      LPSECURITY_ATTRIBUTES securityAttributes = NULL)
+  WRes Create(bool initiallyOwn, LPCTSTR name = NULL, LPSECURITY_ATTRIBUTES sa = NULL)
   {
-    _handle = ::CreateMutex(securityAttributes, BoolToBOOL(initiallyOwn), name);
-    if (_handle != 0)
+    _handle = ::CreateMutex(sa, BoolToBOOL(initiallyOwn), name);
+    if (name == NULL && _handle != 0)
       return 0;
     return ::GetLastError();
   }
+  #ifndef UNDER_CE
   WRes Open(DWORD desiredAccess, bool inheritHandle, LPCTSTR name)
   {
     _handle = ::OpenMutex(desiredAccess, BoolToBOOL(inheritHandle), name);
@@ -125,8 +108,9 @@ public:
       return 0;
     return ::GetLastError();
   }
-  WRes Release() 
-  { 
+  #endif
+  WRes Release()
+  {
     return ::ReleaseMutex(_handle) ? 0 : ::GetLastError();
   }
 };
@@ -134,21 +118,19 @@ class CMutexLock
 {
   CMutex *_object;
 public:
-  CMutexLock(CMutex &object): _object(&object) { _object->Lock(); } 
+  CMutexLock(CMutex &object): _object(&object) { _object->Lock(); }
   ~CMutexLock() { _object->Release(); }
 };
 #endif
 
-class CSemaphore : private Uncopyable
+class CSemaphore
 {
   ::CSemaphore _object;
 public:
   CSemaphore() { Semaphore_Construct(&_object); }
   ~CSemaphore() { Close(); }
   WRes Close() {  return Semaphore_Close(&_object); }
-#ifdef _WIN32
-  operator HANDLE() { return _object.handle; }
-#endif
+  operator HANDLE() { return _object; }
   WRes Create(UInt32 initiallyCount, UInt32 maxCount)
   {
     return Semaphore_Create(&_object, initiallyCount, maxCount);
@@ -158,7 +140,7 @@ public:
   WRes Lock() { return Semaphore_Wait(&_object); }
 };
 
-class CCriticalSection : private Uncopyable
+class CCriticalSection
 {
   ::CCriticalSection _object;
 public:
@@ -168,20 +150,15 @@ public:
   void Leave() { CriticalSection_Leave(&_object); }
 };
 
-class CCriticalSectionLock : private Uncopyable
+class CCriticalSectionLock
 {
   CCriticalSection *_object;
   void Unlock()  { _object->Leave(); }
 public:
-  CCriticalSectionLock(CCriticalSection &object): _object(&object) {_object->Enter(); } 
+  CCriticalSectionLock(CCriticalSection &object): _object(&object) {_object->Enter(); }
   ~CCriticalSectionLock() { Unlock(); }
 };
 
 }}
 
-#ifndef _WIN32
-#include "Synchronization2.h"
 #endif
-
-#endif
-

@@ -2,6 +2,8 @@
 
 #include "StdAfx.h"
 
+#include "../../../../C/CpuArch.h"
+
 #include "../../../Common/MyWindows.h"
 
 #include "../../../Common/MyInitGuid.h"
@@ -12,8 +14,6 @@
 #ifdef _WIN32
 #include "../../../Windows/DLL.h"
 #include "../../../Windows/FileDir.h"
-#else
-#include "myPrivate.h"
 #endif
 #include "../../../Windows/FileName.h"
 
@@ -26,9 +26,11 @@
 
 #include "../../MyVersion.h"
 
+#include "../../../../C/DllSecur.h"
+
 using namespace NWindows;
 using namespace NFile;
-// FIXME using namespace NDir;
+using namespace NDir;
 using namespace NCommandLineParser;
 
 #ifdef _WIN32
@@ -37,8 +39,8 @@ HINSTANCE g_hInstance = 0;
 int g_CodePage = -1;
 extern CStdOutStream *g_StdStream;
 
-static const char *kCopyrightString =
-"\n7-Zip SFX " MY_VERSION_COPYRIGHT_DATE "\n";
+static const char * const kCopyrightString =
+"\n7-Zip SFX " MY_VERSION_CPU " : " MY_COPYRIGHT_DATE "\n";
 
 static const int kNumSwitches = 6;
 
@@ -65,7 +67,6 @@ enum EEnum
 }
 /*
 static const char kRecursedIDChar = 'R';
-static const wchar_t *kRecursedPostCharSet = L"0-";
 
 namespace NRecursedPostCharIndex {
   enum EEnum
@@ -101,11 +102,11 @@ static const NRecursedType::EEnum kCommandRecursedDefault[kNumCommandForms] =
 // static const bool kTestExtractRecursedDefault = true;
 // static const bool kAddRecursedDefault = false;
 
-static const wchar_t *kUniversalWildcard = L"*";
+static const char * const kUniversalWildcard = "*";
 static const int kCommandIndex = 0;
 
-static const char *kHelpString =
-    "\nUsage: 7zSFX [<command>] [<switches>...]\n"
+static const char * const kHelpString =
+    "\nUsage: 7zSFX [<command>] [<switches>...] [<file_name>...]\n"
     "\n"
     "<Commands>\n"
     // "  l: List contents of archive\n"
@@ -121,16 +122,16 @@ static const char *kHelpString =
 // ---------------------------
 // exception messages
 
-static const char *kUserErrorMessage  = "Incorrect command line"; // NExitCode::kUserError
-// static const char *kIncorrectListFile = "Incorrect wildcard in listfile";
-static const char *kIncorrectWildcardInCommandLine  = "Incorrect wildcard in command line";
+static const char * const kUserErrorMessage  = "Incorrect command line"; // NExitCode::kUserError
+// static const char * const kIncorrectListFile = "Incorrect wildcard in listfile";
+static const char * const kIncorrectWildcardInCommandLine  = "Incorrect wildcard in command line";
 
 // static const CSysString kFileIsNotArchiveMessageBefore = "File \"";
 // static const CSysString kFileIsNotArchiveMessageAfter = "\" is not archive";
 
-// static const char *kProcessArchiveMessage = " archive: ";
+// static const char * const kProcessArchiveMessage = " archive: ";
 
-static const char *kCantFindSFX = " cannot find sfx";
+static const char * const kCantFindSFX = " cannot find sfx";
 
 namespace NCommandType
 {
@@ -224,15 +225,8 @@ void AddCommandLineWildcardToCensor(NWildcard::CCensor &wildcardCensor,
     ShowMessageAndThrowException(kIncorrectWildcardInCommandLine, NExitCode::kUserError);
 }
 
-void AddToCensorFromNonSwitchesStrings(NWildcard::CCensor &wildcardCensor,
-    const UStringVector & /* nonSwitchStrings */, NRecursedType::EEnum type,
-    bool /* thereAreSwitchIncludeWildcards */)
-{
-  AddCommandLineWildcardToCensor(wildcardCensor, kUniversalWildcard, true, type);
-}
 
-
-#if 0 // #ifndef _WIN32
+#ifndef _WIN32
 static void GetArguments(int numArgs, const char *args[], UStringVector &parts)
 {
   parts.Clear();
@@ -246,10 +240,15 @@ static void GetArguments(int numArgs, const char *args[], UStringVector &parts)
 
 int Main2(
   #ifndef _WIN32
-  int numArgs, char *args[]
+  int numArgs, const char *args[]
   #endif
 )
 {
+  #ifdef _WIN32
+  // do we need load Security DLLs for console program?
+  LoadSecurityDlls();
+  #endif
+
   #if defined(_WIN32) && !defined(UNDER_CE)
   SetFileApisToOEM();
   #endif
@@ -260,8 +259,7 @@ int Main2(
   #ifdef _WIN32
   NCommandLineParser::SplitCommandLine(GetCommandLineW(), commandStrings);
   #else
-  // GetArguments(numArgs, args, commandStrings);
-  mySplitCommandLine(numArgs,args,commandStrings);
+  GetArguments(numArgs, args, commandStrings);
   #endif
 
   #ifdef _WIN32
@@ -278,19 +276,27 @@ int Main2(
   }
 
   #else
-  // After mySplitCommandLine
-  showP7zipInfo(&g_StdOut);
 
   UString arcPath = commandStrings.Front();
 
   #endif
 
-  commandStrings.Delete(0);
+  #ifndef UNDER_CE
+  if (commandStrings.Size() > 0)
+    commandStrings.Delete(0);
+  #endif
 
-  NCommandLineParser::CParser parser(kNumSwitches);
+  NCommandLineParser::CParser parser;
+  
   try
   {
-    parser.ParseStrings(kSwitchForms, commandStrings);
+    if (!parser.ParseStrings(kSwitchForms, kNumSwitches, commandStrings))
+    {
+      g_StdOut << "Command line error:" << endl
+          << parser.ErrorMessage << endl
+          << parser.ErrorLine << endl;
+      return NExitCode::kUserError;
+    }
   }
   catch(...)
   {
@@ -302,19 +308,23 @@ int Main2(
     PrintHelp();
     return 0;
   }
+  
   const UStringVector &nonSwitchStrings = parser.NonSwitchStrings;
 
-  int numNonSwitchStrings = nonSwitchStrings.Size();
+  unsigned curCommandIndex = 0;
 
   CArchiveCommand command;
-  if (numNonSwitchStrings == 0)
+  if (nonSwitchStrings.IsEmpty())
     command.CommandType = NCommandType::kFullExtract;
   else
   {
-    if (numNonSwitchStrings > 1)
-      PrintHelpAndExit();
-    if (!ParseArchiveCommand(nonSwitchStrings[kCommandIndex], command))
-      PrintHelpAndExit();
+    const UString &cmd = nonSwitchStrings[curCommandIndex];
+    if (!ParseArchiveCommand(cmd, command))
+    {
+      g_StdOut << "ERROR: Unknown command:" << endl << cmd << endl;
+      return NExitCode::kUserError;
+    }
+    curCommandIndex = 1;
   }
 
 
@@ -323,11 +333,17 @@ int Main2(
 
   NWildcard::CCensor wildcardCensor;
   
-  bool thereAreSwitchIncludeWildcards;
-  thereAreSwitchIncludeWildcards = false;
-
-  AddToCensorFromNonSwitchesStrings(wildcardCensor, nonSwitchStrings, recursedType,
-      thereAreSwitchIncludeWildcards);
+  {
+    if (nonSwitchStrings.Size() == curCommandIndex)
+      AddCommandLineWildcardToCensor(wildcardCensor, (UString)kUniversalWildcard, true, recursedType);
+    for (; curCommandIndex < nonSwitchStrings.Size(); curCommandIndex++)
+    {
+      const UString &s = nonSwitchStrings[curCommandIndex];
+      if (s.IsEmpty())
+        throw "Empty file path";
+      AddCommandLineWildcardToCensor(wildcardCensor, s, true, recursedType);
+    }
+  }
 
   bool yesToAll = parser[NKey::kYes].ThereIs;
 

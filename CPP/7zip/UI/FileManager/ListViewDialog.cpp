@@ -18,8 +18,10 @@ bool CListViewDialog::OnInit()
   #endif
   _listView.Attach(GetItem(IDL_LISTVIEW));
 
-  // FIXME if (ReadSingleClick())
-    // FIXME _listView.SetExtendedListViewStyle(LVS_EX_ONECLICKACTIVATE | LVS_EX_TRACKSELECT);
+  CFmSettings st;
+  st.Load();
+  if (st.SingleClick)
+    _listView.SetExtendedListViewStyle(LVS_EX_ONECLICKACTIVATE | LVS_EX_TRACKSELECT);
 
   SetText(Title);
 
@@ -46,7 +48,6 @@ bool CListViewDialog::OnInit()
 
 bool CListViewDialog::OnSize(WPARAM /* wParam */, int xSize, int ySize)
 {
-#ifdef _WIN32
   int mx, my;
   GetMargins(8, mx, my);
   int bx1, bx2, by;
@@ -70,7 +71,6 @@ bool CListViewDialog::OnSize(WPARAM /* wParam */, int xSize, int ySize)
     mx = 0;
   */
   _listView.Move(mx, my, xSize - mx * 2, y - my * 2);
-#endif
   return false;
 }
 
@@ -78,7 +78,6 @@ extern bool g_LVN_ITEMACTIVATE_Support;
 
 bool CListViewDialog::OnNotify(UINT /* controlID */, LPNMHDR header)
 {
-#ifdef _WIN32
   if (header->hwndFrom != _listView)
     return false;
   switch (header->code)
@@ -134,7 +133,6 @@ bool CListViewDialog::OnNotify(UINT /* controlID */, LPNMHDR header)
       }
     }
   }
-#endif
   return false;
 }
 

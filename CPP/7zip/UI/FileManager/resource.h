@@ -85,6 +85,8 @@
 #define IDM_VIEW_TOOLBARS_LARGE_BUTTONS     752
 #define IDM_VIEW_TOOLBARS_SHOW_BUTTONS_TEXT 753
 
+#define IDM_VIEW_TIME            761
+
 #define IDS_BOOKMARK             801
 
 #define IDM_OPTIONS              900
@@ -92,7 +94,7 @@
 #define IDM_BENCHMARK2           902
 
 #define IDM_HELP_CONTENTS        960
-#define IDM_ABOUT                5014  /* FIXME 961   5014 = wxID_ABOUT */
+#define IDM_ABOUT                961
 
 #define IDS_OPTIONS                     2100
 

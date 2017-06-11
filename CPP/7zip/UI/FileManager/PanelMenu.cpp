@@ -14,6 +14,7 @@
 #include "../Explorer/ContextMenu.h"
 
 #include "App.h"
+#include "FormatUtils.h"
 #include "LangUtils.h"
 #include "MyLoadMenu.h"
 #include "PropertyName.h"
@@ -30,7 +31,6 @@ static const UINT kSystemStartMenuID = kMenuCmdID_Plugin_Start + 100;
 
 void CPanel::InvokeSystemCommand(const char *command)
 {
-#ifdef _WIN32
   NCOM::CComInitializer comInitializer;
   if (!IsFsOrPureDrivesFolder())
     return;
@@ -48,14 +48,11 @@ void CPanel::InvokeSystemCommand(const char *command)
   ci.hwnd = GetParent();
   ci.lpVerb = command;
   contextMenu->InvokeCommand(&ci);
-#else
-  printf(" WARNING CPanel::InvokeSystemCommand(%s)\n",command);
-#endif
 }
 
-static const char *kSeparator = "----------------------------\n";
-static const char *kSeparatorSmall = "----\n";
-static const char *kPropValueSeparator = ": ";
+static const char * const kSeparator = "----------------------------\n";
+static const char * const kSeparatorSmall = "----\n";
+static const char * const kPropValueSeparator = ": ";
 
 extern UString ConvertSizeToString(UInt64 value) throw();
 bool IsSizeProp(UINT propID) throw();
@@ -86,12 +83,12 @@ static void AddPropertyString(PROPID propID, const wchar_t *nameBSTR,
       val = ConvertSizeToString(v);
     }
     else
-      ConvertPropertyToString(val, prop, propID);
+      ConvertPropertyToString2(val, prop, propID);
 
     if (!val.IsEmpty())
     {
       s += GetNameOfProperty(propID, nameBSTR);
-      s.AddAscii(kPropValueSeparator);
+      s += kPropValueSeparator;
       /*
       if (propID == kpidComment)
         s.Add_LF();
@@ -101,6 +98,14 @@ static void AddPropertyString(PROPID propID, const wchar_t *nameBSTR,
     }
   }
 }
+
+
+static void AddPropertyString(PROPID propID, UInt64 val, UString &s)
+{
+  NCOM::CPropVariant prop = val;
+  AddPropertyString(propID, NULL, prop, s);
+}
+
 
 static inline char GetHex(Byte value)
 {
@@ -136,10 +141,11 @@ void CPanel::Properties()
 
     CRecordVector<UInt32> operatedIndices;
     GetOperatedItemIndices(operatedIndices);
+    
     if (operatedIndices.Size() == 1)
     {
       UInt32 index = operatedIndices[0];
-      // message += L"Item:\n";
+      // message += "Item:\n");
       UInt32 numProps;
       if (_folder->GetNumberOfProperties(&numProps) == S_OK)
       {
@@ -186,31 +192,67 @@ void CPanel::Properties()
               const UInt32 kMaxDataSize = 64;
               if (dataSize > kMaxDataSize)
               {
-                char temp[64];
                 s += "data:";
-                ConvertUInt32ToString(dataSize, temp);
-                s += temp;
+                s.Add_UInt32(dataSize);
               }
               else
               {
-                for (UInt32 i = 0; i < dataSize; i++)
+                for (UInt32 k = 0; k < dataSize; k++)
                 {
-                  Byte b = ((const Byte *)data)[i];
+                  Byte b = ((const Byte *)data)[k];
                   s += GetHex((Byte)((b >> 4) & 0xF));
                   s += GetHex((Byte)(b & 0xF));
                 }
               }
             }
             message += GetNameOfProperty(propID, name);
-            message.AddAscii(kPropValueSeparator);
-            message.AddAscii(s);
+            message += kPropValueSeparator;
+            message += s.Ptr();
             message.Add_LF();
           }
         }
       }
 
-      message.AddAscii(kSeparator);
+      message += kSeparator;
     }
+    else if (operatedIndices.Size() >= 1)
+    {
+      UInt64 packSize = 0;
+      UInt64 unpackSize = 0;
+      UInt64 numFiles = 0;
+      UInt64 numDirs = 0;
+
+      FOR_VECTOR (i, operatedIndices)
+      {
+        const UInt32 index = operatedIndices[i];
+        unpackSize += GetItemSize(index);
+        packSize += GetItem_UInt64Prop(index, kpidPackSize);
+        if (IsItem_Folder(index))
+        {
+          numDirs++;
+          numDirs += GetItem_UInt64Prop(index, kpidNumSubDirs);
+          numFiles += GetItem_UInt64Prop(index, kpidNumSubFiles);;
+        }
+        else
+          numFiles++;
+      }
+      {
+        wchar_t temp[32];
+        ConvertUInt32ToString(operatedIndices.Size(), temp);
+        message += MyFormatNew(g_App.LangString_N_SELECTED_ITEMS, temp);
+        message.Add_LF();
+      }
+
+      if (numDirs != 0)
+        AddPropertyString(kpidNumSubDirs, numDirs, message);
+      if (numFiles != 0)
+        AddPropertyString(kpidNumSubFiles, numFiles, message);
+      AddPropertyString(kpidSize, unpackSize, message);
+      AddPropertyString(kpidPackSize, packSize, message);
+
+      message += kSeparator;
+    }
+
         
     /*
     AddLangString(message, IDS_PROP_FILE_TYPE);
@@ -249,8 +291,6 @@ void CPanel::Properties()
       }
     }
 
-    CMyComPtr<IGetFolderArcProps> getFolderArcProps;
-    _folder.QueryInterface(IID_IGetFolderArcProps, &getFolderArcProps);
     if (getFolderArcProps)
     {
       CMyComPtr<IFolderArcProps> getProps;
@@ -269,7 +309,7 @@ void CPanel::Properties()
             {
               const int kNumSpecProps = ARRAY_SIZE(kSpecProps);
 
-              message.AddAscii(kSeparator);
+              message += kSeparator;
               
               for (Int32 i = -(int)kNumSpecProps; i < (Int32)numProps; i++)
               {
@@ -294,7 +334,7 @@ void CPanel::Properties()
             UInt32 numProps;
             if (getProps->GetArcNumProps2(level, &numProps) == S_OK)
             {
-              message.AddAscii(kSeparatorSmall);
+              message += kSeparatorSmall;
               for (Int32 i = 0; i < (Int32)numProps; i++)
               {
                 CMyComBSTR name;
@@ -337,8 +377,8 @@ void CPanel::EditCopy()
   GetSelectedItemsIndices(indices);
   FOR_VECTOR (i, indices)
   {
-    if (i > 0)
-      s += L"\xD\n";
+    if (i != 0)
+      s += "\xD\n";
     s += GetItemName(indices[i]);
   }
   ClipboardSetText(_mainWindow, s);
@@ -363,7 +403,6 @@ void CPanel::EditPaste()
   // InvokeSystemCommand("paste");
 }
 
-#ifdef _WIN32
 HRESULT CPanel::CreateShellContextMenu(
     const CRecordVector<UInt32> &operatedIndices,
     CMyComPtr<IContextMenu> &systemContextMenu)
@@ -589,8 +628,6 @@ void CPanel::CreateSevenZipMenu(HMENU menuSpec,
   }
 }
 
-#endif
-
 static bool IsReadOnlyFolder(IFolderFolder *folder)
 {
   if (!folder)
@@ -659,7 +696,6 @@ bool CPanel::CheckBeforeUpdate(UINT resourceID)
   return true;
 }
 
-#ifdef _WIN32
 void CPanel::CreateFileMenu(HMENU menuSpec,
     CMyComPtr<IContextMenu> &sevenZipContextMenu,
     CMyComPtr<IContextMenu> &systemContextMenu,
@@ -765,7 +801,7 @@ bool CPanel::InvokePluginCommand(int id,
   commandInfo.hwnd = GetParent();
   commandInfo.lpVerb = (LPCSTR)(MAKEINTRESOURCE(offset));
   commandInfo.lpParameters = NULL;
-  CSysString currentFolderSys = GetSystemString(_currentFolderPrefix);
+  const CSysString currentFolderSys (GetSystemString(_currentFolderPrefix));
   commandInfo.lpDirectory = (LPCSTR)(LPCTSTR)(currentFolderSys);
   commandInfo.nShow = SW_SHOW;
   
@@ -875,5 +911,3 @@ bool CPanel::OnContextMenu(HANDLE windowHandle, int xPos, int yPos)
     return true;
   return true;
 }
-#endif
-
